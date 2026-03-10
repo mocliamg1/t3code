@@ -311,6 +311,79 @@ function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
   };
 }
 
+function createSnapshotWithTelemetry(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-telemetry-target" as MessageId,
+    targetText: "telemetry thread",
+  });
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? Object.assign({}, thread, {
+            activities: [
+              {
+                id: "activity-context",
+                tone: "info" as const,
+                kind: "thread.token-usage.updated",
+                summary: "Context usage updated",
+                payload: {
+                  usage: {
+                    total: {
+                      totalTokens: 42_000,
+                      inputTokens: 20_000,
+                      cachedInputTokens: 5_000,
+                      outputTokens: 15_000,
+                      reasoningOutputTokens: 2_000,
+                    },
+                    last: {
+                      totalTokens: 1_200,
+                      inputTokens: 700,
+                      cachedInputTokens: 100,
+                      outputTokens: 300,
+                      reasoningOutputTokens: 100,
+                    },
+                    modelContextWindow: 200_000,
+                    contextWindow: {
+                      remainingTokens: 158_000,
+                    },
+                  },
+                },
+                turnId: null,
+                sequence: 1,
+                createdAt: isoAt(1_010),
+              },
+              {
+                id: "activity-rate-limits",
+                tone: "info" as const,
+                kind: "account.rate-limits.updated",
+                summary: "Rate limits updated",
+                payload: {
+                  rateLimits: {
+                    primary: {
+                      usedPercent: 25,
+                      windowDurationMins: 300,
+                      resetsAt: 1_730_947_200,
+                    },
+                    secondary: {
+                      usedPercent: 60,
+                      windowDurationMins: 10_080,
+                      resetsAt: 1_730_980_800,
+                    },
+                  },
+                },
+                turnId: null,
+                sequence: 2,
+                createdAt: isoAt(1_011),
+              },
+            ],
+            updatedAt: isoAt(1_011),
+          })
+        : thread,
+    ),
+  };
+}
+
 function resolveWsRpc(tag: string): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
@@ -966,6 +1039,87 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the footer telemetry indicator hidden until context data exists", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-telemetry-hidden" as MessageId,
+        targetText: "no telemetry yet",
+      }),
+    });
+
+    try {
+      await waitForComposerEditor();
+      expect(
+        document.querySelector('[aria-label="Conversation context status"]'),
+      ).toBeNull();
+      expect(document.body.textContent).not.toContain("Context usage updated");
+      expect(document.body.textContent).not.toContain("Rate limits updated");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders the footer telemetry indicator when telemetry exists", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithTelemetry(),
+    });
+
+    try {
+      const indicator = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>('[aria-label="Conversation context status"]'),
+        "Unable to find context status indicator.",
+      );
+      expect(document.body.textContent).not.toContain("Context usage updated");
+      expect(document.body.textContent).not.toContain("Rate limits updated");
+      expect(indicator.getBoundingClientRect().width).toBeGreaterThan(0);
+      expect(document.body.textContent).not.toContain("Rate limits");
+
+      indicator.focus();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Context");
+          expect(document.body.textContent).toContain("Rate limits");
+          expect(document.body.textContent).toContain("5h");
+          expect(document.body.textContent).toContain("weekly");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the footer telemetry indicator usable on the mobile viewport", async () => {
+    const mounted = await mountChatView({
+      viewport: TEXT_VIEWPORT_MATRIX[2],
+      snapshot: createSnapshotWithTelemetry(),
+    });
+
+    try {
+      const indicator = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>('[aria-label="Conversation context status"]'),
+        "Unable to find context status indicator.",
+      );
+      const threadToolbar = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>('[data-chat-thread-toolbar="true"]'),
+        "Unable to find thread toolbar.",
+      );
+
+      const triggerRect = indicator.getBoundingClientRect();
+      const footerRect = threadToolbar.getBoundingClientRect();
+      expect(triggerRect.width).toBeGreaterThan(0);
+      expect(triggerRect.right).toBeLessThanOrEqual(footerRect.right + 1);
     } finally {
       await mounted.cleanup();
     }

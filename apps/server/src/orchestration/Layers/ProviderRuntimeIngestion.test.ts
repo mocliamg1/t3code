@@ -1427,6 +1427,89 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe("# Plan title");
   });
 
+  it("projects context usage and rate-limit telemetry into hidden thread activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "thread.token-usage.updated",
+      eventId: asEventId("evt-thread-token-usage"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-telemetry"),
+      payload: {
+        usage: {
+          total: {
+            totalTokens: 42_000,
+            inputTokens: 20_000,
+            cachedInputTokens: 5_000,
+            outputTokens: 15_000,
+            reasoningOutputTokens: 2_000,
+          },
+          last: {
+            totalTokens: 1_200,
+            inputTokens: 700,
+            cachedInputTokens: 100,
+            outputTokens: 300,
+            reasoningOutputTokens: 100,
+          },
+          modelContextWindow: 200_000,
+        },
+      },
+    });
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-account-rate-limits"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          primary: {
+            usedPercent: 25,
+            windowDurationMins: 300,
+            resetsAt: 1_730_947_200,
+          },
+          secondary: {
+            usedPercent: 60,
+            windowDurationMins: 10_080,
+            resetsAt: 1_730_980_800,
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "thread.token-usage.updated",
+        ) &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.kind === "account.rate-limits.updated",
+        ),
+    );
+
+    const contextUsage = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-thread-token-usage",
+    );
+    const rateLimits = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-account-rate-limits",
+    );
+
+    expect(contextUsage).toMatchObject({
+      kind: "thread.token-usage.updated",
+      summary: "Context usage updated",
+    });
+    expect(rateLimits).toMatchObject({
+      kind: "account.rate-limits.updated",
+      summary: "Rate limits updated",
+    });
+  });
+
   it("projects structured user input request and resolution as thread activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

@@ -692,6 +692,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         status: "ready",
         resumeCursor: { threadId: providerThreadId },
       });
+      await this.prefetchAccountRateLimits(context);
       this.emitLifecycleEvent(
         context,
         "session/threadOpenResolved",
@@ -1327,6 +1328,34 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       method,
       message,
     });
+  }
+
+  private async prefetchAccountRateLimits(context: CodexSessionContext): Promise<void> {
+    try {
+      const response = await this.sendRequest(context, "account/rateLimits/read", {});
+      const responseRecord = this.readObject(response);
+      const rateLimits = this.readObject(responseRecord, "rateLimits");
+      if (!rateLimits) {
+        return;
+      }
+
+      this.emitEvent({
+        id: EventId.makeUnsafe(randomUUID()),
+        kind: "notification",
+        provider: "codex",
+        threadId: context.session.threadId,
+        createdAt: new Date().toISOString(),
+        method: "account/rateLimits/updated",
+        payload: {
+          rateLimits,
+        },
+      });
+    } catch (error) {
+      await Effect.logWarning("codex app-server account/rateLimits/read failed", {
+        threadId: context.session.threadId,
+        cause: error instanceof Error ? error.message : String(error),
+      }).pipe(this.runPromise);
+    }
   }
 
   private emitEvent(event: ProviderEvent): void {

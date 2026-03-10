@@ -69,6 +69,7 @@ import {
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  deriveThreadTelemetry,
   findLatestProposedPlan,
   type PendingApproval,
   type PendingUserInput,
@@ -218,6 +219,7 @@ import { clamp } from "effect/Number";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
+import ComposerContextStatus from "./ComposerContextStatus";
 
 function formatMessageMeta(createdAt: string, duration: string | null): string {
   if (!duration) return formatTimestamp(createdAt);
@@ -1019,6 +1021,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
   );
+  const threadTelemetry = useMemo(() => deriveThreadTelemetry(threadActivities), [threadActivities]);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -3944,7 +3947,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                     {/* Right side: send / stop button */}
                     <div
                       data-chat-composer-actions="right"
-                      className="flex shrink-0 items-center gap-2"
+                      className="flex min-w-0 shrink items-center gap-2"
                     >
                       {isPreparingWorktree ? (
                         <span className="text-muted-foreground/70 text-xs">
@@ -4110,16 +4113,36 @@ export default function ChatView({ threadId }: ChatViewProps) {
             </form>
           </div>
 
-          {isGitRepo && (
-            <BranchToolbar
-              threadId={activeThread.id}
-              onEnvModeChange={onEnvModeChange}
-              envLocked={envLocked}
-              onComposerFocusRequest={scheduleComposerFocus}
-              {...(canCheckoutPullRequestIntoThread
-                ? { onCheckoutPullRequestRequest: openPullRequestDialog }
-                : {})}
-            />
+          {(isGitRepo || threadTelemetry.contextDisplay) && (
+            <div
+              data-chat-thread-toolbar="true"
+              className={cn(
+                "mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-3 gap-y-2 px-5 pb-3 pt-1",
+                isGitRepo ? "justify-between" : "justify-end",
+              )}
+            >
+              {isGitRepo ? (
+                <BranchToolbar
+                  className="min-w-0 flex-1"
+                  threadId={activeThread.id}
+                  onEnvModeChange={onEnvModeChange}
+                  envLocked={envLocked}
+                  onComposerFocusRequest={scheduleComposerFocus}
+                  {...(canCheckoutPullRequestIntoThread
+                    ? { onCheckoutPullRequestRequest: openPullRequestDialog }
+                    : {})}
+                />
+              ) : null}
+              {threadTelemetry.contextDisplay ? (
+                <div className="mr-2 sm:mr-4">
+                  <ComposerContextStatus
+                    compact={isComposerFooterCompact}
+                    contextDisplay={threadTelemetry.contextDisplay}
+                    rateLimitDisplay={threadTelemetry.rateLimitDisplay}
+                  />
+                </div>
+              ) : null}
+            </div>
           )}
           {pullRequestDialogState ? (
             <PullRequestThreadDialog

@@ -705,7 +705,7 @@ function mapToRuntimeEvents(
         type: "thread.token-usage.updated",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          usage: event.payload ?? {},
+          usage: asObject(event.payload)?.tokenUsage ?? event.payload ?? {},
         },
       },
     ];
@@ -1111,7 +1111,7 @@ function mapToRuntimeEvents(
         type: "account.rate-limits.updated",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          rateLimits: event.payload ?? {},
+          rateLimits: asObject(event.payload)?.rateLimits ?? event.payload ?? {},
         },
       },
     ];

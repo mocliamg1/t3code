@@ -443,6 +443,125 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("unwraps thread/tokenUsage/updated notifications into canonical usage payloads", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-thread-token-usage"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "thread/tokenUsage/updated",
+        turnId: asTurnId("turn-1"),
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          tokenUsage: {
+            total: {
+              totalTokens: 42_000,
+              inputTokens: 20_000,
+              cachedInputTokens: 5_000,
+              outputTokens: 15_000,
+              reasoningOutputTokens: 2_000,
+            },
+            last: {
+              totalTokens: 1_200,
+              inputTokens: 700,
+              cachedInputTokens: 100,
+              outputTokens: 300,
+              reasoningOutputTokens: 100,
+            },
+            modelContextWindow: 200_000,
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "thread.token-usage.updated");
+      if (firstEvent.value.type !== "thread.token-usage.updated") {
+        return;
+      }
+      assert.deepStrictEqual(firstEvent.value.payload.usage, {
+        total: {
+          totalTokens: 42_000,
+          inputTokens: 20_000,
+          cachedInputTokens: 5_000,
+          outputTokens: 15_000,
+          reasoningOutputTokens: 2_000,
+        },
+        last: {
+          totalTokens: 1_200,
+          inputTokens: 700,
+          cachedInputTokens: 100,
+          outputTokens: 300,
+          reasoningOutputTokens: 100,
+        },
+        modelContextWindow: 200_000,
+      });
+    }),
+  );
+
+  it.effect("unwraps account/rateLimits/updated notifications into canonical rate limits", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-account-rate-limits"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "account/rateLimits/updated",
+        payload: {
+          rateLimits: {
+            primary: {
+              usedPercent: 25,
+              windowDurationMins: 300,
+              resetsAt: 1_730_947_200,
+            },
+            secondary: {
+              usedPercent: 60,
+              windowDurationMins: 10_080,
+              resetsAt: 1_730_980_800,
+            },
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "account.rate-limits.updated");
+      if (firstEvent.value.type !== "account.rate-limits.updated") {
+        return;
+      }
+      assert.deepStrictEqual(firstEvent.value.payload.rateLimits, {
+        primary: {
+          usedPercent: 25,
+          windowDurationMins: 300,
+          resetsAt: 1_730_947_200,
+        },
+        secondary: {
+          usedPercent: 60,
+          windowDurationMins: 10_080,
+          resetsAt: 1_730_980_800,
+        },
+      });
+    }),
+  );
+
   it.effect("preserves request type when mapping serverRequest/resolved", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

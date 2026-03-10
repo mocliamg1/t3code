@@ -1,9 +1,10 @@
 import { EventId, MessageId, TurnId, type OrchestrationThreadActivity } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  deriveThreadTelemetry,
   PROVIDER_OPTIONS,
   derivePendingApprovals,
   derivePendingUserInputs,
@@ -36,6 +37,10 @@ function makeActivity(overrides: {
     ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("derivePendingApprovals", () => {
   it("tracks open approvals and removes resolved ones", () => {
@@ -432,6 +437,34 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["first", "second"]);
   });
 
+  it("omits telemetry activities from the visible work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "context-usage",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "thread.token-usage.updated",
+        summary: "Context usage updated",
+        tone: "info",
+      }),
+      makeActivity({
+        id: "rate-limits",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "account.rate-limits.updated",
+        summary: "Rate limits updated",
+        tone: "info",
+      }),
+      makeActivity({
+        id: "tool-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Tool call complete",
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+  });
+
   it("extracts command text for command tool activities", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -478,6 +511,266 @@ describe("deriveWorkLogEntries", () => {
       "apps/web/src/components/ChatView.tsx",
       "apps/web/src/session-logic.ts",
     ]);
+  });
+});
+
+describe("deriveThreadTelemetry", () => {
+  it("computes context and rate-limit displays from normalized activities", () => {
+    const telemetry = deriveThreadTelemetry([
+      makeActivity({
+        id: "rate-limits",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "account.rate-limits.updated",
+        summary: "Rate limits updated",
+        tone: "info",
+        payload: {
+          rateLimits: {
+            primary: {
+              usedPercent: 25,
+              windowDurationMins: 300,
+              resetsAt: 1_730_947_200,
+            },
+            secondary: {
+              usedPercent: 60,
+              windowDurationMins: 10_080,
+              resetsAt: 1_730_980_800,
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "context",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "thread.token-usage.updated",
+        summary: "Context usage updated",
+        tone: "info",
+        payload: {
+          usage: {
+            total: {
+              totalTokens: 42_000,
+              inputTokens: 20_000,
+              cachedInputTokens: 5_000,
+              outputTokens: 15_000,
+              reasoningOutputTokens: 2_000,
+            },
+            last: {
+              totalTokens: 1_200,
+              inputTokens: 700,
+              cachedInputTokens: 100,
+              outputTokens: 300,
+              reasoningOutputTokens: 100,
+            },
+            modelContextWindow: 200_000,
+            contextWindow: {
+              remainingTokens: 158_000,
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect(telemetry.contextDisplay).toEqual({
+      usedTokens: 42_000,
+      remainingTokens: 158_000,
+      usedPercent: 21,
+      remainingPercent: 79,
+      modelContextWindow: 200_000,
+      lastTurnTotalTokens: 1_200,
+      lastTurnInputTokens: 700,
+      lastTurnCachedInputTokens: 100,
+      lastTurnOutputTokens: 300,
+      lastTurnReasoningOutputTokens: 100,
+    });
+    expect(telemetry.rateLimitDisplay).toMatchObject({
+      primary: {
+        label: "5h",
+        remainingPercent: 75,
+        available: true,
+      },
+      secondary: {
+        label: "weekly",
+        remainingPercent: 40,
+        available: true,
+      },
+    });
+  });
+
+  it("parses legacy nested telemetry payloads and clamps percentages", () => {
+    const telemetry = deriveThreadTelemetry([
+      makeActivity({
+        id: "rate-limits-legacy",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "account.rate-limits.updated",
+        summary: "Rate limits updated",
+        tone: "info",
+        payload: {
+          rateLimits: {
+            rateLimits: {
+              primary: {
+                usedPercent: 140,
+                windowDurationMins: null,
+                resetsAt: null,
+              },
+              secondary: null,
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "context-legacy",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "thread.token-usage.updated",
+        summary: "Context usage updated",
+        tone: "info",
+        payload: {
+          usage: {
+            tokenUsage: {
+              total: {
+                totalTokens: 400,
+                inputTokens: 200,
+                cachedInputTokens: 0,
+                outputTokens: 150,
+                reasoningOutputTokens: 50,
+              },
+              last: {
+                totalTokens: 40,
+                inputTokens: 20,
+                cachedInputTokens: 0,
+                outputTokens: 15,
+                reasoningOutputTokens: 5,
+              },
+              modelContextWindow: 100,
+              contextWindow: {
+                remainingPercent: 15,
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect(telemetry.contextDisplay?.usedPercent).toBe(85);
+    expect(telemetry.contextDisplay?.remainingTokens).toBe(15);
+    expect(telemetry.rateLimitDisplay?.primary).toMatchObject({
+      label: "5h",
+      usedPercent: 100,
+      remainingPercent: 0,
+      available: true,
+    });
+    expect(telemetry.rateLimitDisplay?.secondary).toMatchObject({
+      label: "weekly",
+      available: false,
+    });
+  });
+
+  it("falls back to last input tokens when explicit context usage is absent", () => {
+    const telemetry = deriveThreadTelemetry([
+      makeActivity({
+        id: "context-total-only",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "thread.token-usage.updated",
+        summary: "Context usage updated",
+        tone: "info",
+        payload: {
+          usage: {
+            total: {
+              totalTokens: 119_076,
+              inputTokens: 107_201,
+              cachedInputTokens: 0,
+              outputTokens: 11_875,
+              reasoningOutputTokens: 0,
+            },
+            last: {
+              totalTokens: 1_200,
+              inputTokens: 700,
+              cachedInputTokens: 100,
+              outputTokens: 300,
+              reasoningOutputTokens: 100,
+            },
+            modelContextWindow: 272_000,
+          },
+        },
+      }),
+    ]);
+
+    expect(telemetry.context).not.toBeNull();
+    expect(telemetry.contextDisplay?.usedTokens).toBe(700);
+    expect(telemetry.contextDisplay?.remainingTokens).toBe(271_300);
+    expect(telemetry.contextDisplay?.usedPercent).toBeCloseTo((700 / 272_000) * 100);
+    expect(telemetry.contextDisplay?.remainingPercent).toBeCloseTo(
+      100 - (700 / 272_000) * 100,
+    );
+    expect(telemetry.contextDisplay?.modelContextWindow).toBe(272_000);
+    expect(telemetry.contextDisplay?.lastTurnInputTokens).toBe(700);
+  });
+
+  it("formats reset times beyond one day away as dates", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-23T10:00:00.000Z"));
+
+    const resetAtSeconds = Math.floor(Date.parse("2026-02-25T12:00:00.000Z") / 1_000);
+    const telemetry = deriveThreadTelemetry([
+      makeActivity({
+        id: "rate-limits-date",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "account.rate-limits.updated",
+        summary: "Rate limits updated",
+        tone: "info",
+        payload: {
+          rateLimits: {
+            primary: {
+              usedPercent: 25,
+              windowDurationMins: 300,
+              resetsAt: Math.floor(Date.parse("2026-02-23T14:00:00.000Z") / 1_000),
+            },
+            secondary: {
+              usedPercent: 60,
+              windowDurationMins: 10_080,
+              resetsAt: resetAtSeconds,
+            },
+          },
+        },
+      }),
+    ]);
+
+    expect(telemetry.rateLimitDisplay?.secondary.resetTimeLabel).toBe(
+      new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+      }).format(new Date(resetAtSeconds * 1_000)),
+    );
+  });
+
+  it("hides context telemetry when the model context window is missing or zero", () => {
+    expect(
+      deriveThreadTelemetry([
+        makeActivity({
+          id: "context-missing-window",
+          kind: "thread.token-usage.updated",
+          summary: "Context usage updated",
+          tone: "info",
+          payload: {
+            usage: {
+              total: {
+                totalTokens: 400,
+                inputTokens: 200,
+                cachedInputTokens: 0,
+                outputTokens: 150,
+                reasoningOutputTokens: 50,
+              },
+              last: {
+                totalTokens: 40,
+                inputTokens: 20,
+                cachedInputTokens: 0,
+                outputTokens: 15,
+                reasoningOutputTokens: 5,
+              },
+              modelContextWindow: 0,
+            },
+          },
+        }),
+      ]).contextDisplay,
+    ).toBeNull();
   });
 });
 

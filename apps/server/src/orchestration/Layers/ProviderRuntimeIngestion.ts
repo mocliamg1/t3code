@@ -288,6 +288,40 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "thread.token-usage.updated": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "thread.token-usage.updated",
+          summary: "Context usage updated",
+          payload: {
+            usage: event.payload.usage,
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "account.rate-limits.updated": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "account.rate-limits.updated",
+          summary: "Rate limits updated",
+          payload: {
+            rateLimits: event.payload.rateLimits,
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "turn.plan.updated": {
       return [
         {

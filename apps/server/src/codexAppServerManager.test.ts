@@ -19,6 +19,17 @@ import {
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 
+interface RateLimitPrefetchContext {
+  session: {
+    provider: "codex";
+    status: "ready";
+    threadId: ThreadId;
+    runtimeMode: "full-access";
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+
 function createSendTurnHarness() {
   const manager = new CodexAppServerManager();
   const context = {
@@ -368,6 +379,109 @@ describe("startSession", () => {
       versionCheck.mockRestore();
       manager.stopAll();
     }
+  });
+
+  it("prefetches rate limits and emits a synthetic notification", async () => {
+    const manager = new CodexAppServerManager();
+    const context: RateLimitPrefetchContext = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: asThreadId("thread-1"),
+        runtimeMode: "full-access",
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+    };
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+        "sendRequest",
+      )
+      .mockResolvedValue({
+        rateLimits: {
+          primary: {
+            usedPercent: 25,
+            windowDurationMins: 300,
+            resetsAt: 1_730_947_200,
+          },
+          secondary: {
+            usedPercent: 60,
+            windowDurationMins: 10_080,
+            resetsAt: 1_730_980_800,
+          },
+        },
+      });
+    const emitEvent = vi
+      .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+      .mockImplementation(() => {});
+
+    await (
+      manager as unknown as {
+        prefetchAccountRateLimits: (context: RateLimitPrefetchContext) => Promise<void>;
+      }
+    ).prefetchAccountRateLimits(context);
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "account/rateLimits/read", {});
+    expect(emitEvent).toHaveBeenCalledWith({
+      id: expect.any(String),
+      kind: "notification",
+      provider: "codex",
+      threadId: "thread-1",
+      createdAt: expect.any(String),
+      method: "account/rateLimits/updated",
+      payload: {
+        rateLimits: {
+          primary: {
+            usedPercent: 25,
+            windowDurationMins: 300,
+            resetsAt: 1_730_947_200,
+          },
+          secondary: {
+            usedPercent: 60,
+            windowDurationMins: 10_080,
+            resetsAt: 1_730_980_800,
+          },
+        },
+      },
+    });
+  });
+
+  it("swallows rate-limit prefetch failures", async () => {
+    const manager = new CodexAppServerManager();
+    const context: RateLimitPrefetchContext = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: asThreadId("thread-1"),
+        runtimeMode: "full-access",
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+    };
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+        "sendRequest",
+      )
+      .mockRejectedValue(new Error("rate limit lookup unavailable"));
+    const emitEvent = vi
+      .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+      .mockImplementation(() => {});
+
+    await expect(
+      (
+        manager as unknown as {
+          prefetchAccountRateLimits: (context: RateLimitPrefetchContext) => Promise<void>;
+        }
+      ).prefetchAccountRateLimits(context),
+    ).resolves.toBeUndefined();
+    expect(sendRequest).toHaveBeenCalledWith(context, "account/rateLimits/read", {});
+    expect(emitEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "account/rateLimits/updated",
+      }),
+    );
   });
 });
 
